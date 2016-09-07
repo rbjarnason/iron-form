@@ -40,6 +40,7 @@ call the form's `submit` method.
     function submitForm() {
       document.getElementById('form').submit();
     }
+
 To customize the request sent to the server, you can listen to the `iron-form-presubmit`
 event, and modify the form's[`iron-ajax`](https://elements.polymer-project.org/elements/iron-ajax)
 object. However, If you want to not use `iron-ajax` at all, you can cancel the
@@ -62,7 +63,6 @@ event and do your own custom submission:
 
 @demo demo/index.html
 */
-
   Polymer({
 
     is: 'iron-form',
@@ -120,13 +120,14 @@ event and do your own custom submission:
       *
       * Note: setting a `Content-Type` header here will override the value
       * specified by the `contentType` property of this element.
-       */
+      */
       headers: {
         type: Object,
         value: function() {
           return {};
-      }
-    },
+        }
+      },
+
       /**
       * iron-ajax request object used to submit the form.
       */
@@ -134,6 +135,7 @@ event and do your own custom submission:
         type: Object,
       }
     },
+
     /**
      * Fired if the form cannot be submitted because it's invalid.
      *
@@ -152,7 +154,7 @@ event and do your own custom submission:
      * @event iron-form-submit
      */
 
-    /**
+     /**
       * Fired after the form is reset.
       *
       * @event iron-form-reset
@@ -255,7 +257,7 @@ event and do your own custom submission:
       var event = this.fire('iron-form-presubmit', {}, {cancelable: true});
       if(!event.defaultPrevented) {
         this.request.generateRequest();
-      this.fire('iron-form-submit', json);
+        this.fire('iron-form-submit', json);
       }
     },
 
@@ -312,7 +314,7 @@ event and do your own custom submission:
       for (var el, i = 0; el = this._customElements[i], i < this._customElements.length; i++) {
         // If this custom element is inside a custom element that has already
         // registered to this form, skip it.
-        if (!this._isChildOfRegisteredParent(el) && this._useValue(el)) {
+        if (!this._isChildOfRegisteredParent(el, true) && this._useValue(el)) {
           addSerializedElement(el.name, el.value);
         }
       }
@@ -321,9 +323,10 @@ event and do your own custom submission:
       for (var el, i = 0; el = this.elements[i], i < this.elements.length; i++) {
         // If this native element is inside a custom element that has already
         // registered to this form, skip it.
-        if (this._isChildOfRegisteredParent(el) || !this._useValue(el)) {
+        if (this._isChildOfRegisteredParent(el, true) || !this._useValue(el)) {
           continue;
         }
+
         // A <select multiple> has an array of values.
         if (el.tagName.toLowerCase() === 'select' && el.multiple) {
           for (var o = 0; o < el.options.length; o++) {
@@ -380,7 +383,7 @@ event and do your own custom submission:
       // Validate all the custom elements.
       var validatable;
       for (var el, i = 0; el = this._customElements[i], i < this._customElements.length; i++) {
-        if (el.required && !el.disabled) {
+        if (!this._isChildOfRegisteredParent(el, false) && !el.disabled) {
           validatable = /** @type {{validate: (function() : boolean)}} */ (el);
           // Some elements may not have correctly defined a validate method.
           if (validatable.validate)
@@ -390,6 +393,12 @@ event and do your own custom submission:
 
       // Validate the form's native elements.
       for (var el, i = 0; el = this.elements[i], i < this.elements.length; i++) {
+        // If this native element is inside a custom element that has already
+        // registered to this form, skip it.
+        if (this._isChildOfRegisteredParent(el, false)) {
+          continue;
+        }
+
         // Custom elements that extend a native element will also appear in
         // this list, but they've already been validated.
         if (!el.hasAttribute('is') && el.willValidate && el.checkValidity) {
@@ -456,7 +465,25 @@ event and do your own custom submission:
           if (this._usesCheckedInsteadOfValue(el)) {
             el.checked = this._customElementsInitialValues[i];
           } else {
-            el.value = this._customElementsInitialValues[i];
+            // The native input/textarea displays literal "undefined" when its
+            // its value is set to undefined, so default to null instead.
+            var value = this._customElementsInitialValues[i];
+            if (value === undefined) {
+              value = null;
+            }
+            el.value = value;
+
+            // In the shady DOM, the native form is all-seeing, and will
+            // reset the nested inputs inside <paper-input> and <paper-textarea>.
+            // In particular, it resets them to what it thinks the default value
+            // is (i.e. "", before the bindings have ran), and since this is
+            // a programmatic update, it also doesn't fire any events.
+            // Which means we need to manually update the native element's value.
+            if (el.inputElement) {
+              el.inputElement.value = el.value;
+            } else if (el.textarea) {
+              el.textarea.value = el.value;
+            }
           }
           el.invalid = false;
         }
@@ -468,9 +495,10 @@ event and do your own custom submission:
     /**
      * Returns true if `node` is in the shadow DOM of a different element,
      * that has also implemented IronFormElementBehavior and is registered
-     * to this form.
+     * to this form. The second parameter specifies if the parent must have a
+     * name to be considered.
      */
-    _isChildOfRegisteredParent: function(node) {
+    _isChildOfRegisteredParent: function(node, checkHasName) {
       var parent = node;
 
       // At some point going up the tree we'll find either this form or the document.
@@ -478,8 +506,10 @@ event and do your own custom submission:
         // Use logical parentnode, or native ShadowRoot host.
         parent = Polymer.dom(parent).parentNode || parent.host;
 
-        // Check if the parent was registered.
-        if (parent && parent._parentForm === this) {
+        // Check if the parent was registered and submittable.
+        if (parent &&
+            (!checkHasName || parent.name) &&
+            parent._parentForm === this) {
           return true;
         }
       }
